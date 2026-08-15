@@ -1,0 +1,16 @@
+{
+  "name": "neighborhood-checkin-infra",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "echo no build step needed",
+    "cdk": "cdk"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.150.0"
+  }
+}
