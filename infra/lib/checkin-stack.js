@@ -53,17 +53,29 @@ class CheckinStack extends Stack {
     volunteersTable.grantReadData(assignFn);
     checkInsTable.grantWriteData(assignFn);
 
-    // ---------- Lambda: escalation checker (the agent's core loop) ----------
+    // ---------- Lambda: escalation agent (Strands Agents SDK, tool-calling loop) ----------
+    // This is the "brain" of the system: instead of hardcoded if/else, it's given
+    // tools + a policy prompt and reasons through each pending check-in itself.
+    // Uses Groq's free, OpenAI-compatible API as the model provider (via Strands' OpenAIModel
+    // class) — chosen after hitting an account-level Bedrock activation delay during
+    // development; see README for details. Swapping back to Bedrock/Nova/Claude later only
+    // requires changing the model construction in escalationAgent.mjs.
     const escalateFn = new lambda.Function(this, 'EscalateCheckInsFn', {
       runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'escalateCheckIns.handler',
-      code: lambda.Code.fromAsset('../backend/lambdas'),
-      timeout: Duration.seconds(30),
+      handler: 'escalationAgent.handler',
+      code: lambda.Code.fromAsset('../backend/agent'),
+      timeout: Duration.seconds(90), // LLM tool-calling loop needs more time than a plain DB call
+      memorySize: 512,
       environment: {
         RESIDENTS_TABLE: residentsTable.tableName,
         VOLUNTEERS_TABLE: volunteersTable.tableName,
         CHECKINS_TABLE: checkInsTable.tableName,
         NOTIFY_TOPIC_ARN: notifyTopic.topicArn,
+        REMINDER_AFTER_MIN: '1',
+        SECRETARY_AFTER_MIN: '2',
+        JOINT_SEC_AFTER_MIN: '3',
+        EMERGENCY_AFTER_MIN: '4',
+        GROQ_API_KEY: process.env.GROQ_API_KEY || '',
       },
     });
     residentsTable.grantReadData(escalateFn);
@@ -96,6 +108,22 @@ class CheckinStack extends Stack {
       targets: [new targets.LambdaFunction(escalateFn)],
     });
 
+    // ---------- Lambda: get today's check-ins (for frontend dashboard) ----------
+    const getCheckInsFn = new lambda.Function(this, 'GetCheckInsFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'getCheckIns.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(15),
+      environment: {
+        RESIDENTS_TABLE: residentsTable.tableName,
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+        CHECKINS_TABLE: checkInsTable.tableName,
+      },
+    });
+    residentsTable.grantReadData(getCheckInsFn);
+    volunteersTable.grantReadData(getCheckInsFn);
+    checkInsTable.grantReadData(getCheckInsFn);
+
     // ---------- API Gateway (for frontend to call markDone) ----------
     const api = new apigw.RestApi(this, 'CheckinApi', {
       restApiName: 'neighborhood-checkin-api',
@@ -105,6 +133,7 @@ class CheckinStack extends Stack {
       },
     });
     const checkins = api.root.addResource('checkins');
+    checkins.addMethod('GET', new apigw.LambdaIntegration(getCheckInsFn));
     const checkinItem = checkins.addResource('{checkInId}');
     checkinItem.addMethod('POST', new apigw.LambdaIntegration(markDoneFn));
 

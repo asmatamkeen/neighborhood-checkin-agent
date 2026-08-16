@@ -1,0 +1,14 @@
+{
+  "name": "neighborhood-checkin-escalation-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@strands-agents/sdk": "^1.0.0",
+    "openai": "^6.45.0",
+    "zod": "^4.1.12",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "@aws-sdk/client-sns": "^3.600.0"
+  }
+}
