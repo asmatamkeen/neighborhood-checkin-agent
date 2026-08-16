@@ -124,6 +124,18 @@ class CheckinStack extends Stack {
     volunteersTable.grantReadData(getCheckInsFn);
     checkInsTable.grantReadData(getCheckInsFn);
 
+    // ---------- Lambda: list people for the "who are you?" picker ----------
+    const getPeopleFn = new lambda.Function(this, 'GetPeopleFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'getPeople.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(15),
+      environment: {
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+      },
+    });
+    volunteersTable.grantReadData(getPeopleFn);
+
     // ---------- API Gateway (for frontend to call markDone) ----------
     const api = new apigw.RestApi(this, 'CheckinApi', {
       restApiName: 'neighborhood-checkin-api',
@@ -136,6 +148,8 @@ class CheckinStack extends Stack {
     checkins.addMethod('GET', new apigw.LambdaIntegration(getCheckInsFn));
     const checkinItem = checkins.addResource('{checkInId}');
     checkinItem.addMethod('POST', new apigw.LambdaIntegration(markDoneFn));
+    const people = api.root.addResource('people');
+    people.addMethod('GET', new apigw.LambdaIntegration(getPeopleFn));
 
     this.apiUrl = api.url;
   }

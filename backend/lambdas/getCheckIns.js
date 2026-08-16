@@ -36,6 +36,7 @@ exports.handler = async () => {
       status: item.status,
       residentName: resident.name,
       residentUnit: resident.unit,
+      assignedVolunteerId: item.assignedVolunteerId,
       volunteerName: volunteer ? volunteer.name : 'Unassigned',
       assignedAt: item.assignedAt,
       completedAt: item.completedAt || null,

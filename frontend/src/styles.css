@@ -115,6 +115,15 @@ body {
   box-shadow: var(--shadow);
 }
 
+.picker-card {
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.picker-card:hover {
+  border-color: var(--primary);
+  transform: translateY(-1px);
+}
+
 .card-top {
   display: flex;
   justify-content: space-between;

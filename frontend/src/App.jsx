@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { fetchCheckIns, markDone } from './api.js';
+import PersonPicker from './PersonPicker.jsx';
 
 const STAGES = ['pending', 'reminder_sent', 'escalated_secretary', 'escalated_joint_secretary', 'escalated_emergency'];
 
@@ -52,7 +53,7 @@ function timeAgo(iso) {
   return `${hrs} hr${hrs > 1 ? 's' : ''} ago`;
 }
 
-function CheckInCard({ item, onMarkDone, marking }) {
+function CheckInCard({ item, onMarkDone, marking, showVolunteer }) {
   const isDone = item.status === 'done';
   return (
     <div className="card">
@@ -65,9 +66,11 @@ function CheckInCard({ item, onMarkDone, marking }) {
       </div>
 
       <div className="meta-row">
-        <span>
-          Volunteer: <strong>{item.volunteerName}</strong>
-        </span>
+        {showVolunteer && (
+          <span>
+            Volunteer: <strong>{item.volunteerName}</strong>
+          </span>
+        )}
         <span>Assigned {timeAgo(item.assignedAt)}</span>
       </div>
 
@@ -90,7 +93,7 @@ function CheckInCard({ item, onMarkDone, marking }) {
   );
 }
 
-export default function App() {
+function Dashboard({ currentUser, onSwitchUser }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [markingId, setMarkingId] = useState(null);
@@ -123,7 +126,13 @@ export default function App() {
     }
   };
 
-  const checkIns = data?.checkIns || [];
+  const isVolunteer = currentUser.role === 'volunteer';
+  const allCheckIns = data?.checkIns || [];
+  // Volunteers only see their own assignments; secretary/joint secretary see everyone's.
+  const checkIns = isVolunteer
+    ? allCheckIns.filter((c) => c.assignedVolunteerId === currentUser.volunteerId)
+    : allCheckIns;
+
   const counts = {
     pending: checkIns.filter((c) => c.status === 'pending' || c.status === 'reminder_sent').length,
     escalated: checkIns.filter((c) => c.status.startsWith('escalated')).length,
@@ -133,19 +142,28 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
-        <p className="eyebrow">Green Park Colony · Wellness Check-Ins</p>
-        <h1 className="title">Today's check-ins</h1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div>
+            <p className="eyebrow">Green Park Colony · Wellness Check-Ins</p>
+            <h1 className="title">
+              {isVolunteer ? `Hi, ${currentUser.name}` : `${currentUser.name}'s oversight view`}
+            </h1>
+          </div>
+          <button className="btn btn-done" onClick={onSwitchUser}>
+            Switch person
+          </button>
+        </div>
         <p className="subtitle">
-          Every resident is assigned a volunteer each morning. If a check-in isn't confirmed in
-          time, the agent escalates on its own — first a reminder, then the secretary, then the
-          joint secretary, then the emergency contact.
+          {isVolunteer
+            ? "Here's who you're checking on today. If you don't mark a visit done in time, the agent reminds you, then escalates."
+            : 'Every resident\'s check-in status today, and where the agent has escalated any that were missed.'}
         </p>
       </header>
 
       <div className="stats">
         <div className="stat">
           <div className="stat-num">{checkIns.length}</div>
-          <div className="stat-label">Total today</div>
+          <div className="stat-label">{isVolunteer ? 'Assigned to you' : 'Total today'}</div>
         </div>
         <div className="stat">
           <div className="stat-num">{counts.pending}</div>
@@ -164,7 +182,9 @@ export default function App() {
       {error && <p className="state-message">Couldn't load check-ins: {error}</p>}
       {!error && !data && <p className="state-message">Loading today's check-ins…</p>}
       {!error && data && checkIns.length === 0 && (
-        <p className="state-message">No check-ins assigned yet today.</p>
+        <p className="state-message">
+          {isVolunteer ? "You're not assigned any check-ins today." : 'No check-ins assigned yet today.'}
+        </p>
       )}
 
       <div className="list">
@@ -174,6 +194,7 @@ export default function App() {
             item={item}
             onMarkDone={handleMarkDone}
             marking={markingId === item.checkInId}
+            showVolunteer={!isVolunteer}
           />
         ))}
       </div>
@@ -184,4 +205,27 @@ export default function App() {
       </p>
     </div>
   );
+}
+
+export default function App() {
+  const [currentUser, setCurrentUser] = useState(() => {
+    const saved = localStorage.getItem('checkin-current-user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  const handleSelect = (person) => {
+    setCurrentUser(person);
+    localStorage.setItem('checkin-current-user', JSON.stringify(person));
+  };
+
+  const handleSwitchUser = () => {
+    setCurrentUser(null);
+    localStorage.removeItem('checkin-current-user');
+  };
+
+  if (!currentUser) {
+    return <PersonPicker onSelect={handleSelect} />;
+  }
+
+  return <Dashboard currentUser={currentUser} onSwitchUser={handleSwitchUser} />;
 }
