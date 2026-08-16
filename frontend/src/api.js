@@ -1,6 +1,6 @@
 // Set this to your API Gateway URL after deploying the infra stack.
 // Example: https://u3i91e02zi.execute-api.ap-south-1.amazonaws.com/prod
-export const API_BASE = import.meta.env.VITE_API_BASE || 'REPLACE_WITH_YOUR_API_URL';
+export const API_BASE = import.meta.env.VITE_API_BASE || 'https://u3i91e02zi.execute-api.ap-south-1.amazonaws.com/prod';
 
 export async function fetchCheckIns() {
   const res = await fetch(`${API_BASE}/checkins`);
