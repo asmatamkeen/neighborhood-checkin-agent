@@ -19,6 +19,7 @@ const residents = [
     preferredTime: '18:00',
     preferredMethod: 'visit',
     notes: 'Prefers evening visits, hard of hearing',
+    residentPhone: '', // no personal phone on file — OTP goes to emergency contact
     emergencyContactName: 'Suresh Rao (son)',
     emergencyContactPhone: '+919000000001',
     consentGiven: true,
@@ -31,6 +32,7 @@ const residents = [
     preferredTime: '17:30',
     preferredMethod: 'call',
     notes: 'Lives alone, diabetic',
+    residentPhone: '+919000000032', // has his own phone
     emergencyContactName: 'Anitha Murthy (daughter)',
     emergencyContactPhone: '+919000000002',
     consentGiven: true,
@@ -43,6 +45,7 @@ const residents = [
     preferredTime: '19:00',
     preferredMethod: 'visit',
     notes: 'Uses a walker',
+    residentPhone: '',
     emergencyContactName: 'Imran Sheikh (nephew)',
     emergencyContactPhone: '+919000000003',
     consentGiven: true,
@@ -85,6 +88,7 @@ const volunteers = [
     email: 'meena.secretary@example.com',
     availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     role: 'secretary',
+    // no adminPin yet — she sets her own the first time she opens the dashboard
     active: true,
   },
   {
@@ -94,6 +98,7 @@ const volunteers = [
     email: 'deepak.jointsecretary@example.com',
     availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     role: 'joint_secretary',
+    // no adminPin yet — he sets his own the first time he opens the dashboard
     active: true,
   },
 ];

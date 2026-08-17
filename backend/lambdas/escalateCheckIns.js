@@ -74,6 +74,8 @@ exports.handler = async () => {
     const resident = residentRes.Item;
     if (!resident) continue;
 
+    // Walk the escalation chain based on elapsed time and current status.
+    // Each stage only fires once, moving status forward, never backward.
     if (item.status === 'pending' && elapsed >= REMINDER_AFTER_MIN) {
       const log = await appendLog(item.checkInId, { step: 'reminder_sent', at: new Date().toISOString() });
       await updateStatus(item.checkInId, 'reminder_sent', log);

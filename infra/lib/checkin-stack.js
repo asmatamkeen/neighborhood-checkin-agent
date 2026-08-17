@@ -52,6 +52,14 @@ class CheckinStack extends Stack {
     residentsTable.grantReadData(assignFn);
     volunteersTable.grantReadData(assignFn);
     checkInsTable.grantWriteData(assignFn);
+    // Allow direct-to-phone SMS for sending each day's OTP (separate from the topic-based
+    // notifications used elsewhere, since this targets a phone number, not a subscribed topic)
+    assignFn.addToRolePolicy(
+      new (require('aws-cdk-lib/aws-iam').PolicyStatement)({
+        actions: ['sns:Publish'],
+        resources: ['*'],
+      })
+    );
 
     // ---------- Lambda: escalation agent (Strands Agents SDK, tool-calling loop) ----------
     // This is the "brain" of the system: instead of hardcoded if/else, it's given
@@ -83,7 +91,7 @@ class CheckinStack extends Stack {
     checkInsTable.grantReadWriteData(escalateFn);
     notifyTopic.grantPublish(escalateFn);
 
-    // ---------- Lambda: mark check-in done (called from frontend) ----------
+    // ---------- Lambda: mark check-in done (called from frontend, PIN-verified) ----------
     const markDoneFn = new lambda.Function(this, 'MarkCheckInDoneFn', {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'markCheckInDone.handler',
@@ -91,9 +99,51 @@ class CheckinStack extends Stack {
       timeout: Duration.seconds(15),
       environment: {
         CHECKINS_TABLE: checkInsTable.tableName,
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
       },
     });
     checkInsTable.grantReadWriteData(markDoneFn);
+    volunteersTable.grantReadData(markDoneFn);
+
+    // ---------- Lambda: reassign a check-in to a different volunteer (secretary only) ----------
+    const reassignFn = new lambda.Function(this, 'ReassignCheckInFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'reassignCheckIn.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(15),
+      environment: {
+        CHECKINS_TABLE: checkInsTable.tableName,
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+      },
+    });
+    checkInsTable.grantReadWriteData(reassignFn);
+    volunteersTable.grantReadData(reassignFn);
+
+    // ---------- Lambda: add a new resident (secretary only) ----------
+    const addResidentFn = new lambda.Function(this, 'AddResidentFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'addResident.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(15),
+      environment: {
+        RESIDENTS_TABLE: residentsTable.tableName,
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+      },
+    });
+    residentsTable.grantWriteData(addResidentFn);
+    volunteersTable.grantReadData(addResidentFn);
+
+    // ---------- Lambda: add a new volunteer/secretary (secretary only) ----------
+    const addPersonFn = new lambda.Function(this, 'AddPersonFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'addPerson.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(15),
+      environment: {
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+      },
+    });
+    volunteersTable.grantReadWriteData(addPersonFn);
 
     // ---------- EventBridge schedules ----------
     // Every day at 8 AM IST (2:30 UTC): assign check-ins
@@ -148,8 +198,30 @@ class CheckinStack extends Stack {
     checkins.addMethod('GET', new apigw.LambdaIntegration(getCheckInsFn));
     const checkinItem = checkins.addResource('{checkInId}');
     checkinItem.addMethod('POST', new apigw.LambdaIntegration(markDoneFn));
+    const reassign = checkinItem.addResource('reassign');
+    reassign.addMethod('POST', new apigw.LambdaIntegration(reassignFn));
+
+    // ---------- Lambda: secretary/joint secretary sets their own PIN (first-time only) ----------
+    const setAdminPinFn = new lambda.Function(this, 'SetAdminPinFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'setAdminPin.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(15),
+      environment: {
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+      },
+    });
+    volunteersTable.grantReadWriteData(setAdminPinFn);
+
     const people = api.root.addResource('people');
     people.addMethod('GET', new apigw.LambdaIntegration(getPeopleFn));
+    people.addMethod('POST', new apigw.LambdaIntegration(addPersonFn));
+    const personItem = people.addResource('{volunteerId}');
+    const setPin = personItem.addResource('set-pin');
+    setPin.addMethod('POST', new apigw.LambdaIntegration(setAdminPinFn));
+
+    const residents = api.root.addResource('residents');
+    residents.addMethod('POST', new apigw.LambdaIntegration(addResidentFn));
 
     this.apiUrl = api.url;
   }

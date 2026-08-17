@@ -14,8 +14,57 @@ export async function fetchPeople() {
   return res.json();
 }
 
-export async function markDone(checkInId) {
-  const res = await fetch(`${API_BASE}/checkins/${checkInId}`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to mark check-in done');
-  return res.json();
+export async function setAdminPin(volunteerId, newPin) {
+  const res = await fetch(`${API_BASE}/people/${volunteerId}/set-pin`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newPin }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to set PIN');
+  return data;
+}
+
+export async function markDone(checkInId, otp) {
+  const res = await fetch(`${API_BASE}/checkins/${checkInId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ otp }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to mark check-in done');
+  return data;
+}
+
+export async function reassignCheckIn(checkInId, newVolunteerId, actingPersonId, adminPin) {
+  const res = await fetch(`${API_BASE}/checkins/${checkInId}/reassign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ newVolunteerId, actingPersonId, adminPin }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to reassign');
+  return data;
+}
+
+export async function addResident(payload) {
+  const res = await fetch(`${API_BASE}/residents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to add resident');
+  return data;
+}
+
+export async function addPerson(payload) {
+  const res = await fetch(`${API_BASE}/people`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to add person');
+  return data;
 }
