@@ -1,6 +1,7 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
 const { randomUUID } = require('crypto');
+const { getCallerProfile } = require('./authHelper');
 
 const ddb = new DynamoDBDocumentClient(new DynamoDBClient({}));
 const VOLUNTEERS_TABLE = process.env.VOLUNTEERS_TABLE;
@@ -17,34 +18,20 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: cors(), body: JSON.stringify({ error: 'Invalid request body' }) };
   }
 
-  const { actingPersonId, adminPin, name, phone, email, availableDays, role, newAdminPin } = body;
+  const { name, phone, email, availableDays, role } = body;
 
-  if (!actingPersonId || !adminPin || !name || !phone) {
+  if (!name || !phone || !email) {
     return {
       statusCode: 400,
       headers: cors(),
-      body: JSON.stringify({ error: 'Missing required fields' }),
+      body: JSON.stringify({ error: 'Name, phone, and email are all required' }),
     };
   }
 
-  const actorRes = await ddb.send(
-    new GetCommand({ TableName: VOLUNTEERS_TABLE, Key: { volunteerId: actingPersonId } })
-  );
-  const actor = actorRes.Item;
-  const isAuthorized =
-    actor && actor.adminPin === adminPin && ['secretary', 'joint_secretary'].includes(actor.role);
+  const caller = await getCallerProfile(event, VOLUNTEERS_TABLE);
+  const isAuthorized = caller && ['secretary', 'joint_secretary'].includes(caller.role);
   if (!isAuthorized) {
     return { statusCode: 403, headers: cors(), body: JSON.stringify({ error: 'Not authorized to add people' }) };
-  }
-
-  const finalRole = role || 'volunteer';
-  const needsAdminPin = finalRole === 'secretary' || finalRole === 'joint_secretary';
-  if (needsAdminPin && !/^\d{4}$/.test(newAdminPin || '')) {
-    return {
-      statusCode: 400,
-      headers: cors(),
-      body: JSON.stringify({ error: 'A 4-digit admin PIN is required for secretary/joint secretary roles' }),
-    };
   }
 
   const volunteerId = `vol_${randomUUID().slice(0, 8)}`;
@@ -52,18 +39,17 @@ exports.handler = async (event) => {
     volunteerId,
     name,
     phone,
-    email: email || '',
+    email: email.toLowerCase(),
     availableDays: availableDays || [],
-    role: finalRole,
+    role: role || 'volunteer',
     active: true,
   };
-  if (needsAdminPin) item.adminPin = newAdminPin;
 
   await ddb.send(new PutCommand({ TableName: VOLUNTEERS_TABLE, Item: item }));
 
   return {
     statusCode: 201,
     headers: cors(),
-    body: JSON.stringify({ volunteerId, name, role: item.role }),
+    body: JSON.stringify({ volunteerId, name, role: item.role, email: item.email }),
   };
 };

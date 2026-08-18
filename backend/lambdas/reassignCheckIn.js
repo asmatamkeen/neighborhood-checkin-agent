@@ -1,5 +1,6 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, UpdateCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
+const { getCallerProfile } = require('./authHelper');
 
 const ddb = new DynamoDBDocumentClient(new DynamoDBClient({}));
 const CHECKINS_TABLE = process.env.CHECKINS_TABLE;
@@ -18,22 +19,15 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: cors(), body: JSON.stringify({ error: 'Invalid request body' }) };
   }
 
-  const { newVolunteerId, actingPersonId, adminPin } = body;
-  if (!checkInId || !newVolunteerId || !actingPersonId || !adminPin) {
-    return {
-      statusCode: 400,
-      headers: cors(),
-      body: JSON.stringify({ error: 'checkInId, newVolunteerId, actingPersonId, and adminPin are required' }),
-    };
+  const { newVolunteerId } = body;
+  if (!checkInId || !newVolunteerId) {
+    return { statusCode: 400, headers: cors(), body: JSON.stringify({ error: 'newVolunteerId is required' }) };
   }
 
-  // Only a secretary or joint_secretary may reassign, and only with their correct admin PIN.
-  const actorRes = await ddb.send(
-    new GetCommand({ TableName: VOLUNTEERS_TABLE, Key: { volunteerId: actingPersonId } })
-  );
-  const actor = actorRes.Item;
-  const isAuthorized =
-    actor && actor.adminPin === adminPin && ['secretary', 'joint_secretary'].includes(actor.role);
+  // Authorization comes from who is actually logged in (verified by Cognito),
+  // not anything the client claims in the request body.
+  const caller = await getCallerProfile(event, VOLUNTEERS_TABLE);
+  const isAuthorized = caller && ['secretary', 'joint_secretary'].includes(caller.role);
   if (!isAuthorized) {
     return { statusCode: 403, headers: cors(), body: JSON.stringify({ error: 'Not authorized to reassign' }) };
   }
@@ -55,7 +49,7 @@ exports.handler = async (event) => {
     step: 'reassigned',
     from: current.Item.assignedVolunteerId,
     to: newVolunteerId,
-    by: actor.name,
+    by: caller.name,
     at: new Date().toISOString(),
   });
 

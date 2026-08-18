@@ -1,6 +1,7 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
 const { randomUUID } = require('crypto');
+const { getCallerProfile } = require('./authHelper');
 
 const ddb = new DynamoDBDocumentClient(new DynamoDBClient({}));
 const RESIDENTS_TABLE = process.env.RESIDENTS_TABLE;
@@ -19,8 +20,6 @@ exports.handler = async (event) => {
   }
 
   const {
-    actingPersonId,
-    adminPin,
     name,
     unit,
     preferredTime,
@@ -31,20 +30,12 @@ exports.handler = async (event) => {
     emergencyContactPhone,
   } = body;
 
-  if (!actingPersonId || !adminPin || !name || !unit || !emergencyContactName || !emergencyContactPhone) {
-    return {
-      statusCode: 400,
-      headers: cors(),
-      body: JSON.stringify({ error: 'Missing required fields' }),
-    };
+  if (!name || !unit || !emergencyContactName || !emergencyContactPhone) {
+    return { statusCode: 400, headers: cors(), body: JSON.stringify({ error: 'Missing required fields' }) };
   }
 
-  const actorRes = await ddb.send(
-    new GetCommand({ TableName: VOLUNTEERS_TABLE, Key: { volunteerId: actingPersonId } })
-  );
-  const actor = actorRes.Item;
-  const isAuthorized =
-    actor && actor.adminPin === adminPin && ['secretary', 'joint_secretary'].includes(actor.role);
+  const caller = await getCallerProfile(event, VOLUNTEERS_TABLE);
+  const isAuthorized = caller && ['secretary', 'joint_secretary'].includes(caller.role);
   if (!isAuthorized) {
     return { statusCode: 403, headers: cors(), body: JSON.stringify({ error: 'Not authorized to add residents' }) };
   }
@@ -60,7 +51,7 @@ exports.handler = async (event) => {
     residentPhone: residentPhone || '',
     emergencyContactName,
     emergencyContactPhone,
-    consentGiven: true, // secretary-entered = consent already collected
+    consentGiven: true,
     active: true,
   };
 

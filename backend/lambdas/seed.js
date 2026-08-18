@@ -61,6 +61,7 @@ const volunteers = [
     email: 'ravi@example.com',
     availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
     role: 'volunteer',
+    // no pin yet — everyone sets their own the first time they open the app
     active: true,
   },
   {
@@ -88,7 +89,6 @@ const volunteers = [
     email: 'meena.secretary@example.com',
     availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     role: 'secretary',
-    // no adminPin yet — she sets her own the first time she opens the dashboard
     active: true,
   },
   {
@@ -98,7 +98,6 @@ const volunteers = [
     email: 'deepak.jointsecretary@example.com',
     availableDays: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     role: 'joint_secretary',
-    // no adminPin yet — he sets his own the first time he opens the dashboard
     active: true,
   },
 ];

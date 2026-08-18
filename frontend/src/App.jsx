@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { fetchCheckIns, fetchPeople, markDone, reassignCheckIn, addResident, addPerson } from './api.js';
-import PersonPicker from './PersonPicker.jsx';
+import { fetchCheckIns, fetchPeople, fetchMyProfile, markDone, reassignCheckIn, addResident, addPerson, runAssignmentNow } from './api.js';
+import { getCurrentIdToken, signOut } from './auth.js';
+import Auth from './Auth.jsx';
 import PinPrompt from './PinPrompt.jsx';
-import SetupPin from './SetupPin.jsx';
 
 const STAGES = ['pending', 'reminder_sent', 'escalated_secretary', 'escalated_joint_secretary', 'escalated_emergency'];
 
@@ -55,12 +55,11 @@ function timeAgo(iso) {
   return `${hrs} hr${hrs > 1 ? 's' : ''} ago`;
 }
 
-function CheckInCard({ item, showVolunteer, isVolunteerView, currentUser, onMarkDone, onReassign, volunteersList, busy, errorMsg }) {
+function CheckInCard({ item, showVolunteer, isVolunteerView, onMarkDone, onReassign, volunteersList, busy, errorMsg }) {
   const isDone = item.status === 'done';
-  const [showPin, setShowPin] = useState(false);
+  const [showOtp, setShowOtp] = useState(false);
   const [showReassign, setShowReassign] = useState(false);
   const [newVolunteerId, setNewVolunteerId] = useState('');
-  const [reassignPin, setReassignPin] = useState(false);
 
   return (
     <div className="card">
@@ -87,16 +86,16 @@ function CheckInCard({ item, showVolunteer, isVolunteerView, currentUser, onMark
 
       {!isDone && isVolunteerView && (
         <div style={{ marginTop: 16 }}>
-          {!showPin ? (
-            <button className="btn btn-primary" onClick={() => setShowPin(true)}>
+          {!showOtp ? (
+            <button className="btn btn-primary" onClick={() => setShowOtp(true)}>
               Mark check-in done
             </button>
           ) : (
             <PinPrompt
               label="Enter today's code (texted to the resident or their family)"
               busy={busy}
-              onCancel={() => setShowPin(false)}
-              onConfirm={(otp) => onMarkDone(item.checkInId, otp, () => setShowPin(false))}
+              onCancel={() => setShowOtp(false)}
+              onConfirm={(otp) => onMarkDone(item.checkInId, otp, () => setShowOtp(false))}
             />
           )}
         </div>
@@ -109,10 +108,10 @@ function CheckInCard({ item, showVolunteer, isVolunteerView, currentUser, onMark
               Reassign volunteer
             </button>
           ) : (
-            <div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <select
                 className="pin-input"
-                style={{ marginBottom: 8 }}
+                style={{ width: 180 }}
                 value={newVolunteerId}
                 onChange={(e) => setNewVolunteerId(e.target.value)}
               >
@@ -125,22 +124,21 @@ function CheckInCard({ item, showVolunteer, isVolunteerView, currentUser, onMark
                     </option>
                   ))}
               </select>
-              {newVolunteerId && (
-                <PinPrompt
-                  label={`Enter your admin PIN (${currentUser.name}) to confirm reassignment`}
-                  busy={busy}
-                  onCancel={() => {
+              <button
+                className="btn btn-primary"
+                disabled={!newVolunteerId || busy}
+                onClick={() =>
+                  onReassign(item.checkInId, newVolunteerId, () => {
                     setShowReassign(false);
                     setNewVolunteerId('');
-                  }}
-                  onConfirm={(adminPin) =>
-                    onReassign(item.checkInId, newVolunteerId, adminPin, () => {
-                      setShowReassign(false);
-                      setNewVolunteerId('');
-                    })
-                  }
-                />
-              )}
+                  })
+                }
+              >
+                {busy ? 'Saving…' : 'Confirm'}
+              </button>
+              <button className="btn btn-done" onClick={() => setShowReassign(false)}>
+                Cancel
+              </button>
             </div>
           )}
         </div>
@@ -149,26 +147,25 @@ function CheckInCard({ item, showVolunteer, isVolunteerView, currentUser, onMark
   );
 }
 
-function AddResidentForm({ currentUser, onAdd }) {
+function AddResidentForm({ onAdd }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
     name: '', unit: '', preferredTime: '18:00', preferredMethod: 'visit',
     notes: '', residentPhone: '', emergencyContactName: '', emergencyContactPhone: '',
   });
-  const [showPin, setShowPin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [justAdded, setJustAdded] = useState(null);
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const submit = async (adminPin) => {
+  const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      await addResident({ ...form, actingPersonId: currentUser.volunteerId, adminPin });
+      const created = await addResident(form);
       setForm({ name: '', unit: '', preferredTime: '18:00', preferredMethod: 'visit', notes: '', residentPhone: '', emergencyContactName: '', emergencyContactPhone: '' });
-      setShowPin(false);
-      setOpen(false);
+      setJustAdded(created.name);
       onAdd();
     } catch (e) {
       setError(e.message);
@@ -176,6 +173,27 @@ function AddResidentForm({ currentUser, onAdd }) {
       setBusy(false);
     }
   };
+
+  if (justAdded) {
+    return (
+      <div className="card" style={{ background: 'var(--done-soft)' }}>
+        <p style={{ margin: 0, color: 'var(--done)', fontWeight: 500 }}>
+          ✓ {justAdded} added. They'll appear here automatically after tomorrow's daily
+          assignment — or click "Run today's assignment now" below to see them right away.
+        </p>
+        <button
+          className="btn btn-primary"
+          style={{ marginTop: 10 }}
+          onClick={() => {
+            setJustAdded(null);
+            setOpen(false);
+          }}
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
 
   if (!open) {
     return (
@@ -205,44 +223,36 @@ function AddResidentForm({ currentUser, onAdd }) {
         Each morning, a fresh check-in code is texted to the resident's own phone if given, otherwise to the emergency contact.
       </p>
       {error && <p className="pin-error">{error}</p>}
-      {!showPin ? (
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-          <button
-            className="btn btn-primary"
-            disabled={!form.name || !form.unit || !form.emergencyContactName || !form.emergencyContactPhone}
-            onClick={() => setShowPin(true)}
-          >
-            Continue
-          </button>
-          <button className="btn btn-done" onClick={() => setOpen(false)}>Cancel</button>
-        </div>
-      ) : (
-        <div style={{ marginTop: 12 }}>
-          <PinPrompt label="Enter your PIN to confirm" busy={busy} onCancel={() => setShowPin(false)} onConfirm={submit} />
-        </div>
-      )}
+      <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+        <button
+          className="btn btn-primary"
+          disabled={busy || !form.name || !form.unit || !form.emergencyContactName || !form.emergencyContactPhone}
+          onClick={submit}
+        >
+          {busy ? 'Saving…' : 'Save resident'}
+        </button>
+        <button className="btn btn-done" onClick={() => setOpen(false)}>Cancel</button>
+      </div>
     </div>
   );
 }
 
-function AddVolunteerForm({ currentUser, onAdd }) {
+function AddVolunteerForm({ onAdd }) {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: '', phone: '', role: 'volunteer', newAdminPin: '' });
-  const [showPin, setShowPin] = useState(false);
+  const [form, setForm] = useState({ name: '', phone: '', email: '', role: 'volunteer' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [justAdded, setJustAdded] = useState(null);
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-  const needsPin = form.role === 'secretary' || form.role === 'joint_secretary';
 
-  const submit = async (adminPin) => {
+  const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      await addPerson({ ...form, actingPersonId: currentUser.volunteerId, adminPin });
-      setForm({ name: '', phone: '', role: 'volunteer', newAdminPin: '' });
-      setShowPin(false);
-      setOpen(false);
+      const created = await addPerson(form);
+      setForm({ name: '', phone: '', email: '', role: 'volunteer' });
+      setJustAdded(created);
       onAdd();
     } catch (e) {
       setError(e.message);
@@ -250,6 +260,27 @@ function AddVolunteerForm({ currentUser, onAdd }) {
       setBusy(false);
     }
   };
+
+  if (justAdded) {
+    return (
+      <div className="card" style={{ background: 'var(--done-soft)' }}>
+        <p style={{ margin: 0, color: 'var(--done)', fontWeight: 500 }}>
+          ✓ {justAdded.name} added as {justAdded.role.replace('_', ' ')}. Tell them to create an
+          account with {justAdded.email} — that's how they'll sign in.
+        </p>
+        <button
+          className="btn btn-primary"
+          style={{ marginTop: 10 }}
+          onClick={() => {
+            setJustAdded(null);
+            setOpen(false);
+          }}
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
 
   if (!open) {
     return (
@@ -265,48 +296,35 @@ function AddVolunteerForm({ currentUser, onAdd }) {
       <div className="form-grid">
         <input className="pin-input" placeholder="Full name" value={form.name} onChange={update('name')} />
         <input className="pin-input" placeholder="Phone number" value={form.phone} onChange={update('phone')} />
+        <input className="pin-input" placeholder="Email (they'll sign up with this)" value={form.email} onChange={update('email')} style={{ gridColumn: '1 / -1' }} />
         <select className="pin-input" value={form.role} onChange={update('role')}>
           <option value="volunteer">Volunteer</option>
           <option value="joint_secretary">Joint Secretary</option>
         </select>
-        {needsPin && (
-          <input
-            className="pin-input"
-            placeholder="Set their admin PIN (4 digits)"
-            maxLength={4}
-            value={form.newAdminPin}
-            onChange={(e) => setForm({ ...form, newAdminPin: e.target.value.replace(/\D/g, '') })}
-          />
-        )}
       </div>
+      <p style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 8 }}>
+        Tell them this email — they'll use it to create their own account.
+      </p>
       {error && <p className="pin-error">{error}</p>}
-      {!showPin ? (
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-          <button
-            className="btn btn-primary"
-            disabled={!form.name || !form.phone || (needsPin && form.newAdminPin.length !== 4)}
-            onClick={() => setShowPin(true)}
-          >
-            Continue
-          </button>
-          <button className="btn btn-done" onClick={() => setOpen(false)}>Cancel</button>
-        </div>
-      ) : (
-        <div style={{ marginTop: 12 }}>
-          <PinPrompt label="Enter your admin PIN to confirm" busy={busy} onCancel={() => setShowPin(false)} onConfirm={submit} />
-        </div>
-      )}
+      <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+        <button className="btn btn-primary" disabled={busy || !form.name || !form.phone || !form.email} onClick={submit}>
+          {busy ? 'Saving…' : 'Save volunteer'}
+        </button>
+        <button className="btn btn-done" onClick={() => setOpen(false)}>Cancel</button>
+      </div>
     </div>
   );
 }
 
-function Dashboard({ currentUser, onSwitchUser }) {
+function Dashboard({ currentUser, onSignOut }) {
   const [data, setData] = useState(null);
   const [people, setPeople] = useState([]);
   const [error, setError] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [cardErrors, setCardErrors] = useState({});
   const [showAdmin, setShowAdmin] = useState(false);
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignResult, setAssignResult] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -325,11 +343,11 @@ function Dashboard({ currentUser, onSwitchUser }) {
     return () => clearInterval(interval);
   }, [load]);
 
-  const handleMarkDone = async (checkInId, pin, closePrompt) => {
+  const handleMarkDone = async (checkInId, otp, closePrompt) => {
     setBusyId(checkInId);
     setCardErrors((e) => ({ ...e, [checkInId]: null }));
     try {
-      await markDone(checkInId, pin);
+      await markDone(checkInId, otp);
       closePrompt();
       await load();
     } catch (e) {
@@ -339,26 +357,39 @@ function Dashboard({ currentUser, onSwitchUser }) {
     }
   };
 
-  const handleReassign = async (checkInId, newVolunteerId, pin, closePrompt) => {
+  const handleReassign = async (checkInId, newVolunteerId, closePrompt) => {
     setBusyId(checkInId);
     setCardErrors((e) => ({ ...e, [checkInId]: null }));
     try {
-      await reassignCheckIn(checkInId, newVolunteerId, currentUser.volunteerId, pin);
+      await reassignCheckIn(checkInId, newVolunteerId);
       closePrompt();
       await load();
     } catch (e) {
       setCardErrors((prev) => ({ ...prev, [checkInId]: e.message }));
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const handleRunAssignment = async () => {
+    setAssignBusy(true);
+    setAssignResult(null);
+    try {
+      const res = await runAssignmentNow();
+      setAssignResult(`Assigned ${res.assigned} check-in${res.assigned === 1 ? '' : 's'} for today.`);
+      await load();
+    } catch (e) {
+      setAssignResult(`Couldn't run assignment: ${e.message}`);
+    } finally {
+      setAssignBusy(false);
     }
   };
 
   const isVolunteer = currentUser.role === 'volunteer';
   const isSecretaryRole = currentUser.role === 'secretary' || currentUser.role === 'joint_secretary';
-  const allCheckIns = data?.checkIns || [];
-  const checkIns = isVolunteer
-    ? allCheckIns.filter((c) => c.assignedVolunteerId === currentUser.volunteerId)
-    : allCheckIns;
+  // Server already filters to this user's own check-ins if they're a volunteer —
+  // this isn't a security boundary, just display grouping.
+  const checkIns = data?.checkIns || [];
 
   const counts = {
     pending: checkIns.filter((c) => c.status === 'pending' || c.status === 'reminder_sent').length,
@@ -376,8 +407,8 @@ function Dashboard({ currentUser, onSwitchUser }) {
               {isVolunteer ? `Hi, ${currentUser.name}` : `${currentUser.name}'s oversight view`}
             </h1>
           </div>
-          <button className="btn btn-done" onClick={onSwitchUser}>
-            Switch person
+          <button className="btn btn-done" onClick={onSignOut}>
+            Sign out
           </button>
         </div>
         <p className="subtitle">
@@ -412,9 +443,17 @@ function Dashboard({ currentUser, onSwitchUser }) {
             {showAdmin ? 'Hide admin panel' : 'Open admin panel'}
           </button>
           {showAdmin && (
-            <div style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
-              <AddResidentForm currentUser={currentUser} onAdd={load} />
-              <AddVolunteerForm currentUser={currentUser} onAdd={load} />
+            <div style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <AddResidentForm onAdd={load} />
+              <AddVolunteerForm onAdd={load} />
+              <div>
+                <button className="btn btn-done" disabled={assignBusy} onClick={handleRunAssignment}>
+                  {assignBusy ? 'Running…' : "Run today's assignment now"}
+                </button>
+                {assignResult && (
+                  <p style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 6 }}>{assignResult}</p>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -435,7 +474,6 @@ function Dashboard({ currentUser, onSwitchUser }) {
             item={item}
             showVolunteer={!isVolunteer}
             isVolunteerView={isVolunteer}
-            currentUser={currentUser}
             onMarkDone={handleMarkDone}
             onReassign={handleReassign}
             volunteersList={people}
@@ -447,57 +485,46 @@ function Dashboard({ currentUser, onSwitchUser }) {
 
       <p className="footnote">
         Neighborhood Safety Check-In Agent — built with Strands Agents SDK for the AWS Agents for
-        Humans hackathon. Resident data shown here is synthetic, for demonstration purposes. PINs
-        are a lightweight demo safeguard, not production-grade authentication.
+        Humans hackathon. Resident data shown here is synthetic, for demonstration purposes.
       </p>
     </div>
   );
 }
 
 export default function App() {
-  const [currentUser, setCurrentUser] = useState(() => {
-    const saved = localStorage.getItem('checkin-current-user');
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [needsPinSetup, setNeedsPinSetup] = useState(false);
-  const [checkedPin, setCheckedPin] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [checking, setChecking] = useState(true);
+  const [profileError, setProfileError] = useState(null);
+
+  const loadProfile = useCallback(async () => {
+    try {
+      const token = await getCurrentIdToken();
+      if (!token) {
+        setCurrentUser(null);
+        setChecking(false);
+        return;
+      }
+      const profile = await fetchMyProfile();
+      setCurrentUser(profile);
+      setProfileError(null);
+    } catch (e) {
+      setProfileError(e.message);
+      setCurrentUser(null);
+    } finally {
+      setChecking(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (!currentUser) {
-      setCheckedPin(false);
-      return;
-    }
-    const isSecretaryRole = currentUser.role === 'secretary' || currentUser.role === 'joint_secretary';
-    if (!isSecretaryRole) {
-      setNeedsPinSetup(false);
-      setCheckedPin(true);
-      return;
-    }
-    // Re-check against the live list in case their PIN status changed since picking them.
-    fetchPeople()
-      .then((res) => {
-        const fresh = res.people.find((p) => p.volunteerId === currentUser.volunteerId);
-        setNeedsPinSetup(fresh ? !fresh.hasAdminPin : false);
-        setCheckedPin(true);
-      })
-      .catch(() => setCheckedPin(true));
-  }, [currentUser]);
+    loadProfile();
+  }, [loadProfile]);
 
-  const handleSelect = (person) => {
-    setCurrentUser(person);
-    localStorage.setItem('checkin-current-user', JSON.stringify(person));
-  };
-
-  const handleSwitchUser = () => {
+  const handleSignOut = () => {
+    signOut();
     setCurrentUser(null);
-    localStorage.removeItem('checkin-current-user');
   };
 
-  if (!currentUser) {
-    return <PersonPicker onSelect={handleSelect} />;
-  }
-
-  if (!checkedPin) {
+  if (checking) {
     return (
       <div className="app">
         <p className="state-message">Loading…</p>
@@ -505,9 +532,18 @@ export default function App() {
     );
   }
 
-  if (needsPinSetup) {
-    return <SetupPin currentUser={currentUser} onDone={() => setNeedsPinSetup(false)} />;
+  if (!currentUser) {
+    return (
+      <>
+        <Auth onSignedIn={loadProfile} />
+        {profileError && (
+          <p className="state-message" style={{ marginTop: -40 }}>
+            Signed in, but couldn't load your profile: {profileError}
+          </p>
+        )}
+      </>
+    );
   }
 
-  return <Dashboard currentUser={currentUser} onSwitchUser={handleSwitchUser} />;
+  return <Dashboard currentUser={currentUser} onSignOut={handleSignOut} />;
 }

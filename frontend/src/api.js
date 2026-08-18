@@ -1,70 +1,62 @@
-// Set this to your API Gateway URL after deploying the infra stack.
-// Example: https://u3i91e02zi.execute-api.ap-south-1.amazonaws.com/prod
-export const API_BASE = import.meta.env.VITE_API_BASE || 'https://u3i91e02zi.execute-api.ap-south-1.amazonaws.com/prod';
+import { getCurrentIdToken } from './auth.js';
 
-export async function fetchCheckIns() {
-  const res = await fetch(`${API_BASE}/checkins`);
-  if (!res.ok) throw new Error('Failed to load check-ins');
-  return res.json();
-}
+export const API_BASE = import.meta.env.VITE_API_BASE || 'REPLACE_WITH_YOUR_API_URL';
 
-export async function fetchPeople() {
-  const res = await fetch(`${API_BASE}/people`);
-  if (!res.ok) throw new Error('Failed to load people');
-  return res.json();
-}
-
-export async function setAdminPin(volunteerId, newPin) {
-  const res = await fetch(`${API_BASE}/people/${volunteerId}/set-pin`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ newPin }),
+async function authedFetch(path, options = {}) {
+  const token = await getCurrentIdToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: token } : {}),
+      ...(options.headers || {}),
+    },
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to set PIN');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
   return data;
 }
 
-export async function markDone(checkInId, otp) {
-  const res = await fetch(`${API_BASE}/checkins/${checkInId}`, {
+export function fetchMyProfile() {
+  return authedFetch('/me');
+}
+
+export function fetchCheckIns() {
+  return authedFetch('/checkins');
+}
+
+export function fetchPeople() {
+  return authedFetch('/people');
+}
+
+export function markDone(checkInId, otp) {
+  return authedFetch(`/checkins/${checkInId}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ otp }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to mark check-in done');
-  return data;
 }
 
-export async function reassignCheckIn(checkInId, newVolunteerId, actingPersonId, adminPin) {
-  const res = await fetch(`${API_BASE}/checkins/${checkInId}/reassign`, {
+export function reassignCheckIn(checkInId, newVolunteerId) {
+  return authedFetch(`/checkins/${checkInId}/reassign`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ newVolunteerId, actingPersonId, adminPin }),
+    body: JSON.stringify({ newVolunteerId }),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to reassign');
-  return data;
 }
 
-export async function addResident(payload) {
-  const res = await fetch(`${API_BASE}/residents`, {
+export function addResident(payload) {
+  return authedFetch('/residents', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to add resident');
-  return data;
 }
 
-export async function addPerson(payload) {
-  const res = await fetch(`${API_BASE}/people`, {
+export function addPerson(payload) {
+  return authedFetch('/people', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to add person');
-  return data;
+}
+
+export function runAssignmentNow() {
+  return authedFetch('/run-assignment', { method: 'POST' });
 }
