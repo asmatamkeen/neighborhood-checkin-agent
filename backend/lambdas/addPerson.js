@@ -1,5 +1,5 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, PutCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
 const { randomUUID } = require('crypto');
 const { getCallerProfile } = require('./authHelper');
 
@@ -34,12 +34,27 @@ exports.handler = async (event) => {
     return { statusCode: 403, headers: cors(), body: JSON.stringify({ error: 'Not authorized to add people' }) };
   }
 
+  // Email is how a person's login identity is matched to their record — it must
+  // be unique, or we can't tell who's actually signing in.
+  const normalizedEmail = email.toLowerCase();
+  const existingRes = await ddb.send(new ScanCommand({ TableName: VOLUNTEERS_TABLE }));
+  const alreadyUsed = (existingRes.Items || []).some(
+    (v) => v.active && (v.email || '').toLowerCase() === normalizedEmail
+  );
+  if (alreadyUsed) {
+    return {
+      statusCode: 409,
+      headers: cors(),
+      body: JSON.stringify({ error: 'That email is already registered to someone else' }),
+    };
+  }
+
   const volunteerId = `vol_${randomUUID().slice(0, 8)}`;
   const item = {
     volunteerId,
     name,
     phone,
-    email: email.toLowerCase(),
+    email: normalizedEmail,
     availableDays: availableDays || [],
     role: role || 'volunteer',
     active: true,
