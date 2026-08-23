@@ -1,6 +1,6 @@
 import { getCurrentIdToken } from './auth.js';
 
-export const API_BASE = import.meta.env.VITE_API_BASE || 'REPLACE_WITH_YOUR_API_URL';
+export const API_BASE = import.meta.env.VITE_API_BASE || 'https://u3i91e02zi.execute-api.ap-south-1.amazonaws.com/prod';
 
 async function authedFetch(path, options = {}) {
   const token = await getCurrentIdToken();
@@ -59,4 +59,29 @@ export function addPerson(payload) {
 
 export function runAssignmentNow() {
   return authedFetch('/run-assignment', { method: 'POST' });
+}
+
+// These three don't use authedFetch on purpose — they run before sign-in,
+// when there's no token to send yet.
+async function attemptsCall(email, action) {
+  const res = await fetch(`${API_BASE}/signin-attempts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, action }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Attempt check failed');
+  return data;
+}
+
+export function checkLockout(email) {
+  return attemptsCall(email, 'check');
+}
+
+export function recordFailedSignIn(email) {
+  return attemptsCall(email, 'record-failure');
+}
+
+export function clearFailedSignIns(email) {
+  return attemptsCall(email, 'clear');
 }

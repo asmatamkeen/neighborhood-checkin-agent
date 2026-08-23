@@ -37,6 +37,17 @@ class CheckinStack extends Stack {
       pointInTimeRecovery: true,
     });
 
+    // Tracks failed sign-in attempts so we can apply a short temporary lockout.
+    // Safe to destroy on teardown — this holds no real user data, only counters,
+    // and rows expire automatically after a day.
+    const attemptsTable = new dynamodb.Table(this, 'SignInAttemptsTable', {
+      tableName: 'neighborhood-checkin-signin-attempts',
+      partitionKey: { name: 'email', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
     // ---------- SNS topic for notifications ----------
     const notifyTopic = new sns.Topic(this, 'CheckinNotifyTopic', {
       topicName: 'neighborhood-checkin-notifications',
@@ -268,8 +279,23 @@ class CheckinStack extends Stack {
     const me = api.root.addResource('me');
     me.addMethod('GET', new apigw.LambdaIntegration(getMyProfileFn), authOptions);
 
+    // ---------- Lambda: failed sign-in attempt tracking ----------
+    const signInAttemptsFn = new lambda.Function(this, 'SignInAttemptsFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'signInAttempts.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(15),
+      environment: { ATTEMPTS_TABLE: attemptsTable.tableName },
+    });
+    attemptsTable.grantReadWriteData(signInAttemptsFn);
+
     const residents = api.root.addResource('residents');
     residents.addMethod('POST', new apigw.LambdaIntegration(addResidentFn), authOptions);
+
+    // Deliberately NOT behind the Cognito authorizer — this has to work before
+    // anyone is signed in, since its whole job is guarding the sign-in itself.
+    const signInAttempts = api.root.addResource('signin-attempts');
+    signInAttempts.addMethod('POST', new apigw.LambdaIntegration(signInAttemptsFn));
 
     const runAssignment = api.root.addResource('run-assignment');
     runAssignment.addMethod('POST', new apigw.LambdaIntegration(runAssignmentNowFn), authOptions);

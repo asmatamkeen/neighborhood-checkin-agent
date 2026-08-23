@@ -99,3 +99,98 @@ Not polished prose — just honest, specific notes to write from later.
   to do.
 - Haven't yet done a real legal/consent review appropriate for handling real elderly
   residents' emergency contact data (flagged as a pre-pilot requirement, not solved).
+
+---
+
+## Auth hardening — round two (the "wait, we hit that gap too" session)
+
+Started from a genuine question: is this only for the hackathon, or something meant to
+actually run for a real community eventually? Decided: build it for real, not as two
+separate tracks — most "do it properly" work costs nothing extra and directly helps the
+Technical Implementation score too.
+
+Agreed order going in:
+1. Two quick, zero-risk safety fixes.
+2. Real email verification (the biggest piece).
+3. Monitoring — alert *us*, not just residents, if the daily job silently fails.
+4. A genuine resident consent process.
+
+### Step 1 — done
+- Switched all three DynamoDB tables and the Cognito user pool from
+  `RemovalPolicy.DESTROY` to `RemovalPolicy.RETAIN`, turned on point-in-time recovery.
+  A bad `cdk deploy` can no longer wipe real people's data.
+- Restored escalation timings from demo-speed minutes (1/2/3/4) to realistic hours
+  (60/180/300/420 minutes), with a comment explaining how to temporarily lower them
+  again for a live demo.
+- CDK correctly treated this as an in-place update, not a resource replacement —
+  existing seeded data and Cognito accounts survived the deploy untouched.
+
+### Step 2 — real email verification, and everything it surfaced
+- Removed auto-confirm from the PreSignUp trigger; kept the "email must already be
+  registered by the secretary" check. Cognito now sends a real 6-digit code.
+- Hit `global is not defined` immediately — `amazon-cognito-identity-js` expects
+  Node's `global` in a browser context. Fixed with a one-line Vite `define` pointing
+  `global` at `globalThis`.
+- Hit `USER_SRP_AUTH is not enabled for the client` — the library defaults to SRP auth,
+  but the Cognito app client was only configured for `USER_PASSWORD_AUTH`. Enabled both.
+- **Real bug caught by testing, not by design review:** added a test volunteer through
+  the app using the same real email already registered to the secretary. Nothing in
+  `addPerson.js` checked for that. Since login resolves "who is this" by scanning for a
+  matching email, two people sharing one email meant login could nondeterministically
+  become either identity. Fixed by rejecting `addPerson` calls where the email is
+  already in use by another active person — email is genuinely the identity key now,
+  so it has to be unique.
+- **Real gap hit firsthand, not anticipated:** forgot a just-created password mid-testing.
+  Cognito's console "Reset password" action doesn't hand you a working password — it
+  just invalidates the old one and leaves the account needing a new one, with no UI in
+  our app to actually set it. Unblocked manually via
+  `aws cognito-idp admin-set-user-password ... --permanent`, then built a proper
+  "Forgot password?" flow into the sign-in screen right after (Cognito's native
+  forgot-password code + confirm-password calls, same pattern as sign-up verification).
+
+### Reflection worth keeping for the post
+This stretch was slower than building the agent itself, and it's worth explaining why
+in the post rather than glossing over it: the agent is a linear pipeline with one happy
+path. Auth has to hold up against every way someone could misuse it, most of which don't
+show up as errors — they show up as things quietly working *wrong* (viewing someone
+else's dashboard, claiming someone else's identity, two people silently sharing one
+identity). Every one of tonight's real security fixes came from actually testing the
+flow as a real user, not from anticipating it in the design — a decent argument for why
+"just ship it, we'll fix bugs later" is a much riskier approach specifically for auth
+than for most other features.
+
+### Testing both roles with one inbox
+- Only had one real email, so only the secretary path had been verified. Used Gmail's
+  `+alias` trick (`me+ravi@gmail.com`, `me+priya@gmail.com`) — Cognito treats each as a
+  separate account, but every verification code still lands in one real inbox. Let both
+  the secretary and volunteer experiences get tested properly without extra email accounts.
+- Confirmed the OTP proof-of-visit flow end to end: pulled the day's code from the
+  `AssignCheckInsFn` CloudWatch logs (the fallback we built for exactly this, since the
+  seeded phone numbers aren't real), entered it as the volunteer, watched the check-in
+  flip to done.
+- **UX problem surfaced while testing:** a person already added to the members table
+  still has to click "First time here? Create an account," because being in the RWA's
+  member list and having a login are two different things. Obvious once you know the
+  design, genuinely confusing if you don't. Worth rewording before real volunteers use it.
+
+### Sign-in lockout — and why it's time-limited, not permanent
+- Added a 3-strikes rule: three wrong passwords locks the account for 15 minutes.
+- Chose a *temporary* lockout deliberately. A permanent lock would mean anyone who knows
+  a volunteer's email could deliberately fail three times and lock them out on purpose.
+  In an app whose whole job is confirming vulnerable residents are okay, locking the
+  wrong person out indefinitely is its own kind of harm — so the fix had to not create a
+  worse failure mode than the one it prevents.
+- Successful sign-in clears the counter; so does completing a password reset, so the
+  forgot-password flow doubles as the escape hatch if someone does get locked out.
+- Attempt records auto-expire after a day via DynamoDB TTL, so the table doesn't
+  accumulate stale rows.
+- Skipped Cognito's paid advanced-security tier (adaptive auth, compromised-credential
+  detection) for now — worth revisiting before a real pilot, noted as a deliberate
+  tradeoff rather than an oversight.
+
+### Recurring annoyance worth mentioning in the post
+Config values (`API_BASE`, Cognito pool/client IDs) live as fallback constants in source
+files, so every time a file got recopied during development, the placeholders came back
+and silently broke things — three separate times, each presenting as a different-looking
+bug (`ERR_NAME_NOT_RESOLVED`, HTML returned instead of JSON, `undefined` in the UI).
+Moving these to a `.env` file is the obvious fix and is still outstanding.

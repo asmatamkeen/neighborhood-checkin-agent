@@ -59,6 +59,25 @@ export function signIn(email, password) {
   });
 }
 
+export function forgotPassword(email) {
+  return new Promise((resolve, reject) => {
+    const user = new CognitoUser({ Username: email, Pool: pool });
+    user.forgotPassword({
+      onSuccess: () => resolve(),
+      onFailure: (err) => reject(new Error(err.message || 'Could not send reset code')),
+    });
+  });
+}
+
+export function confirmForgotPassword(email, code, newPassword) {
+  return new Promise((resolve, reject) => {
+    const user = new CognitoUser({ Username: email, Pool: pool });
+    user.confirmPassword(code, newPassword, {
+      onSuccess: () => resolve(),
+      onFailure: (err) => reject(new Error(err.message || 'Could not reset password')),
+    });
+  });
+}
 export function signOut() {
   const user = pool.getCurrentUser();
   if (user) user.signOut();
