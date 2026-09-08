@@ -89,64 +89,17 @@ Not polished prose — just honest, specific notes to write from later.
 - Added a secretary-facing "run today's assignment now" button, backed by a proper
   Lambda invoking the real assignment function — avoids needing AWS console access for
   a very ordinary admin action.
-
-## Open items / honest limitations (good material for the post's "what's next" section)
-
-- PINs/auth have no lockout on repeated failed attempts yet.
-- SMS delivery for the daily OTP is best-effort — logged to CloudWatch as a fallback
-  in case real delivery to Indian numbers hits carrier/sandbox restrictions.
-- No live-deployed frontend yet (local dev only as of this note) — Amplify deploy still
-  to do.
-- Haven't yet done a real legal/consent review appropriate for handling real elderly
-  residents' emergency contact data (flagged as a pre-pilot requirement, not solved).
-
----
-
-## Auth hardening — round two (the "wait, we hit that gap too" session)
-
-Started from a genuine question: is this only for the hackathon, or something meant to
-actually run for a real community eventually? Decided: build it for real, not as two
-separate tracks — most "do it properly" work costs nothing extra and directly helps the
-Technical Implementation score too.
-
-Agreed order going in:
-1. Two quick, zero-risk safety fixes.
-2. Real email verification (the biggest piece).
-3. Monitoring — alert *us*, not just residents, if the daily job silently fails.
-4. A genuine resident consent process.
-
-### Step 1 — done
-- Switched all three DynamoDB tables and the Cognito user pool from
-  `RemovalPolicy.DESTROY` to `RemovalPolicy.RETAIN`, turned on point-in-time recovery.
-  A bad `cdk deploy` can no longer wipe real people's data.
-- Restored escalation timings from demo-speed minutes (1/2/3/4) to realistic hours
-  (60/180/300/420 minutes), with a comment explaining how to temporarily lower them
-  again for a live demo.
-- CDK correctly treated this as an in-place update, not a resource replacement —
-  existing seeded data and Cognito accounts survived the deploy untouched.
-
-### Step 2 — real email verification, and everything it surfaced
-- Removed auto-confirm from the PreSignUp trigger; kept the "email must already be
-  registered by the secretary" check. Cognito now sends a real 6-digit code.
-- Hit `global is not defined` immediately — `amazon-cognito-identity-js` expects
-  Node's `global` in a browser context. Fixed with a one-line Vite `define` pointing
-  `global` at `globalThis`.
-- Hit `USER_SRP_AUTH is not enabled for the client` — the library defaults to SRP auth,
-  but the Cognito app client was only configured for `USER_PASSWORD_AUTH`. Enabled both.
-- **Real bug caught by testing, not by design review:** added a test volunteer through
-  the app using the same real email already registered to the secretary. Nothing in
-  `addPerson.js` checked for that. Since login resolves "who is this" by scanning for a
-  matching email, two people sharing one email meant login could nondeterministically
-  become either identity. Fixed by rejecting `addPerson` calls where the email is
-  already in use by another active person — email is genuinely the identity key now,
-  so it has to be unique.
-- **Real gap hit firsthand, not anticipated:** forgot a just-created password mid-testing.
-  Cognito's console "Reset password" action doesn't hand you a working password — it
-  just invalidates the old one and leaves the account needing a new one, with no UI in
-  our app to actually set it. Unblocked manually via
-  `aws cognito-idp admin-set-user-password ... --permanent`, then built a proper
-  "Forgot password?" flow into the sign-in screen right after (Cognito's native
-  forgot-password code + confirm-password calls, same pattern as sign-up verification).
+- Added a fairness fix to daily assignment: originally the "who has done the fewest
+  check-ins" counter reset every run, so it only balanced within a single day and never
+  noticed if the same person worked every weekend and quietly did more than everyone
+  else over time. Fixed by scanning the last 7 days of real check-in history before
+  assigning. Also fixed the day-of-week check to use India local time instead of the
+  Lambda's UTC clock, since an early-morning run in UTC could land on the wrong
+  calendar day for volunteers in India.
+- Caught via testing (not design review): forgot to grant the assignment Lambda read
+  access on the check-ins table after adding the fairness fix, which needs to *read*
+  history it previously only *wrote*. Broke the daily job with a silent
+  `AccessDeniedException` until the CloudWatch logs were checked directly.
 
 ### Reflection worth keeping for the post
 This stretch was slower than building the agent itself, and it's worth explaining why
@@ -188,9 +141,56 @@ than for most other features.
   detection) for now — worth revisiting before a real pilot, noted as a deliberate
   tradeoff rather than an oversight.
 
+### Failure alarms
+Two silent failures (see below) made it obvious that "the code ran without crashing"
+isn't the same as "the system worked." Added three CloudWatch alarms wired to an SNS
+email topic:
+1. Assignment job throws an error → email immediately.
+2. Escalation agent fails twice in a row (covers ~1 hour) → email, since this is the
+   one where a missed check-in silently stops escalating to anyone.
+3. Assignment job hasn't run at all in 25 hours → catches the case where nothing errors,
+   nothing happens, and the dashboard just quietly stays empty.
+
 ### Recurring annoyance worth mentioning in the post
 Config values (`API_BASE`, Cognito pool/client IDs) live as fallback constants in source
 files, so every time a file got recopied during development, the placeholders came back
 and silently broke things — three separate times, each presenting as a different-looking
 bug (`ERR_NAME_NOT_RESOLVED`, HTML returned instead of JSON, `undefined` in the UI).
 Moving these to a `.env` file is the obvious fix and is still outstanding.
+
+## A live dependency broke mid-project (worth noting for anyone forking this)
+
+On 2026-09-08, weeks after the escalation agent was first built and working, it started
+failing every single scheduled run with `ModelError: 404`. Root cause: Groq deprecated
+`llama-3.3-70b-versatile` (the model the agent was calling) on 2026-06-17, migrating
+users to `openai/gpt-oss-120b`. Nothing in our code was wrong — a third-party model we
+depended on simply stopped existing.
+
+- **Diagnosis path:** CloudWatch showed 100% error rate on `EscalateCheckInsFn` with the
+  error count graph flat at 1 and success rate flat at 0%. Expanding the actual log line
+  showed the "404" text; a web search on Groq's model deprecation page confirmed the exact
+  model and exact replacement.
+- **Fix:** one line — swap the `modelId` string. Everything else (tools, prompt, agent
+  structure) was untouched, which is a nice demonstration of how cleanly Strands
+  separates "which model" from "how the agent reasons."
+- **The real lesson for the post:** this is exactly the kind of failure the CloudWatch
+  alarms (built earlier — see "Failure alarms" above) exist to catch. Silent failures in
+  a system whose entire job is noticing when something's wrong are the worst-case
+  scenario — worth stating plainly in the write-up rather than glossing over. Also worth
+  listing as a known risk in the README: any project depending on a specific third-party
+  model ID should expect it to eventually be deprecated, and should either pin to a
+  stable/versioned endpoint if the provider offers one, or budget for occasional
+  model-ID maintenance.
+
+## Open items / honest limitations (good material for the post's "what's next" section)
+
+- No lockout tuning beyond the basic 3-strikes/15-minute rule; no adaptive/compromised-
+  credential detection (Cognito's paid tier covers this, skipped for now).
+- SMS delivery for the daily OTP is best-effort — logged to CloudWatch as a fallback
+  in case real delivery to Indian numbers hits carrier/sandbox restrictions.
+- No live-deployed frontend yet (local dev only as of this note) — Amplify deploy still
+  to do.
+- Config values still live as source-code fallback constants rather than a `.env` file —
+  caused repeated silent breakage during development, not yet fixed properly.
+- Haven't yet done a real legal/consent review appropriate for handling real elderly
+  residents' emergency contact data (flagged as a pre-pilot requirement, not solved).

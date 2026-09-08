@@ -7,6 +7,16 @@
 // system prompt. This is the "brain" of the Neighborhood Safety
 // Check-In Agent, built with @strands-agents/sdk per the hackathon
 // requirement.
+//
+// Model provider: Groq (via Strands' OpenAIModel pointed at Groq's
+// OpenAI-compatible endpoint). Chosen after hitting an account-level
+// Bedrock activation delay during development — see docs/build-journal.md.
+//
+// NOTE: llama-3.3-70b-versatile (the model originally used here) was
+// deprecated by Groq on 2026-06-17. Updated to openai/gpt-oss-120b,
+// Groq's recommended replacement. If this breaks again in the future,
+// check https://console.groq.com/docs/deprecations for the current
+// recommended model.
 
 import { Agent, tool } from '@strands-agents/sdk';
 import { OpenAIModel } from '@strands-agents/sdk/models/openai';
@@ -142,7 +152,7 @@ function buildEscalationAgent() {
     clientConfig: {
       baseURL: 'https://api.groq.com/openai/v1',
     },
-    modelId: 'llama-3.3-70b-versatile',
+    modelId: 'openai/gpt-oss-120b',
     temperature: 0.1, // low temperature: this is an operational decision, not creative writing
     maxTokens: 1024,
   });

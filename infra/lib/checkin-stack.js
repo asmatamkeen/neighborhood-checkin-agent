@@ -6,6 +6,7 @@ const events = require('aws-cdk-lib/aws-events');
 const targets = require('aws-cdk-lib/aws-events-targets');
 const apigw = require('aws-cdk-lib/aws-apigateway');
 const cognito = require('aws-cdk-lib/aws-cognito');
+const cloudwatch = require('aws-cdk-lib/aws-cloudwatch');
 const iam = require('aws-cdk-lib/aws-iam');
 
 class CheckinStack extends Stack {
@@ -108,7 +109,9 @@ class CheckinStack extends Stack {
     });
     residentsTable.grantReadData(assignFn);
     volunteersTable.grantReadData(assignFn);
-    checkInsTable.grantWriteData(assignFn);
+    // Needs read as well as write: the fairness logic counts each volunteer's
+    // recent assignments before deciding who to pick next.
+    checkInsTable.grantReadWriteData(assignFn);
     assignFn.addToRolePolicy(
       new iam.PolicyStatement({ actions: ['sns:Publish'], resources: ['*'] })
     );
@@ -301,6 +304,71 @@ class CheckinStack extends Stack {
     runAssignment.addMethod('POST', new apigw.LambdaIntegration(runAssignmentNowFn), authOptions);
 
     this.apiUrl = api.url;
+
+    // ---------- Failure alarms ----------
+    // Both scheduled jobs have failed silently during development — once from a
+    // missing API key, once from a missing table permission — and in both cases
+    // it went unnoticed for many hours. For a system whose whole purpose is
+    // noticing when someone hasn't been checked on, a job that dies quietly is
+    // the worst failure mode there is. These alarms email a real person instead.
+    const alertTopic = new sns.Topic(this, 'OpsAlertTopic', {
+      topicName: 'neighborhood-checkin-ops-alerts',
+      displayName: 'Neighborhood Check-In alerts',
+    });
+
+    // Set OPS_ALERT_EMAIL before deploying to receive these. AWS sends a
+    // confirmation link to that address once; the subscription is inactive
+    // until it's clicked.
+    const alertEmail = process.env.OPS_ALERT_EMAIL;
+    if (alertEmail) {
+      alertTopic.addSubscription(
+        new (require('aws-cdk-lib/aws-sns-subscriptions').EmailSubscription)(alertEmail)
+      );
+    }
+
+    const alarmAction = new (require('aws-cdk-lib/aws-cloudwatch-actions').SnsAction)(alertTopic);
+
+    // The daily assignment job runs once a day, so a single failure matters —
+    // it means nobody got assigned to anyone today.
+    const assignAlarm = new cloudwatch.Alarm(this, 'AssignCheckInsFailureAlarm', {
+      alarmName: 'neighborhood-checkin-assignment-failed',
+      alarmDescription:
+        "The daily check-in assignment job failed. No one has been assigned to check on residents today.",
+      metric: assignFn.metricErrors({ period: Duration.minutes(5) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    assignAlarm.addAlarmAction(alarmAction);
+
+    // The escalation agent runs every 30 minutes. Two failures in a row means
+    // roughly an hour where a missed check-in wouldn't escalate to anyone.
+    const escalateAlarm = new cloudwatch.Alarm(this, 'EscalateCheckInsFailureAlarm', {
+      alarmName: 'neighborhood-checkin-escalation-failed',
+      alarmDescription:
+        'The escalation agent is failing. Missed check-ins are not being escalated to the secretary or emergency contacts.',
+      metric: escalateFn.metricErrors({ period: Duration.minutes(30) }),
+      threshold: 1,
+      evaluationPeriods: 2,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    escalateAlarm.addAlarmAction(alarmAction);
+
+    // A quieter but equally dangerous failure: the assignment job "succeeds"
+    // but assigns nobody, so the dashboard is simply empty and nothing looks
+    // broken. Alarms if the job hasn't run at all in over a day.
+    const assignSilentAlarm = new cloudwatch.Alarm(this, 'AssignCheckInsMissingAlarm', {
+      alarmName: 'neighborhood-checkin-assignment-did-not-run',
+      alarmDescription: "The daily assignment job hasn't run in over 24 hours.",
+      metric: assignFn.metricInvocations({ period: Duration.hours(25) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+    });
+    assignSilentAlarm.addAlarmAction(alarmAction);
 
     new CfnOutput(this, 'UserPoolId', { value: userPool.userPoolId });
     new CfnOutput(this, 'UserPoolClientId', { value: userPoolClient.userPoolClientId });
