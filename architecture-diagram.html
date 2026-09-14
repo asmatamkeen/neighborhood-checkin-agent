@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture — Neighborhood Safety Check-In Agent</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f4f2ec; font-family: 'Segoe UI', system-ui, sans-serif; padding: 24px; }
+  .page { max-width: 1200px; margin: 0 auto; }
+  h1 { text-align: center; font-size: 24px; color: #1e3a2f; margin: 0 0 4px; }
+  .sub { text-align: center; font-size: 13px; color: #6b7a70; margin: 0 0 24px; }
+  .row { display: flex; gap: 14px; align-items: stretch; margin-bottom: 18px; flex-wrap: wrap; }
+  .box { background: #fff; border: 2px solid #1e3a2f; border-radius: 10px; padding: 12px 14px; flex: 1; min-width: 220px; }
+  .box h2 { margin: 0 0 6px; font-size: 15px; color: #1e3a2f; }
+  .box ul { margin: 0; padding-left: 16px; font-size: 12px; color: #3c4a41; line-height: 1.55; }
+  .aws { border-color: #b48a1e; background: #fffaf0; }
+  .aws h2 { color: #8a6a10; }
+  .agent { border-width: 3px; background: #eef6f0; }
+  .agent h2 { font-size: 16px; }
+  .arr { text-align: center; font-size: 20px; color: #1e3a2f; margin: -10px 0 8px; font-weight: bold; }
+  .flow { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+  .flow .box { flex: 1; min-width: 200px; }
+  .flow .arr { margin: 0; flex: 0 0 auto; }
+  .foot { text-align: center; font-size: 11px; color: #8a948c; margin-top: 18px; }
+  b { color: #1e3a2f; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Neighborhood Safety Check-In Agent — Architecture</h1>
+  <p class="sub">Strands Agents SDK · Groq model · AWS Lambda · DynamoDB · SNS · API Gateway · Cognito · EventBridge</p>
+
+  <!-- Main request flow -->
+  <div class="flow">
+    <div class="box">
+      <h2>Users</h2>
+      <ul><li>Volunteers</li><li>Secretary / Joint Secretary</li><li>Residents (OTP SMS)</li></ul>
+    </div>
+    <div class="arr">→</div>
+    <div class="box">
+      <h2>React Dashboard</h2>
+      <ul><li>Today's check-ins &amp; escalation timeline</li><li>Admin: assign, reassign, remove people, run agent now</li></ul>
+    </div>
+    <div class="arr">→</div>
+    <div class="box aws">
+      <h2>API Gateway + Cognito</h2>
+      <ul><li>All routes behind Cognito authorizer</li><li>Role checked server-side in every Lambda</li></ul>
+    </div>
+    <div class="arr">→</div>
+    <div class="box aws">
+      <h2>AWS Lambda (12 functions)</h2>
+      <ul><li>assignCheckIns · markDone (OTP) · reassign</li><li>add / remove people · run-escalation trigger</li></ul>
+    </div>
+  </div>
+
+  <div class="arr">↓</div>
+
+  <!-- Agent + model + tools -->
+  <div class="flow">
+    <div class="box agent" style="flex: 1.4;">
+      <h2>⭐ Escalation Agent — Strands Agents SDK</h2>
+      <ul>
+        <li>Agentic loop: <b>reason → pick tool → act → observe</b> (no hardcoded if/else branching)</li>
+        <li>Triggered by EventBridge every 30 min, or on demand from the dashboard</li>
+        <li>Policy in system prompt: <b>60 min</b> → reminder · <b>180 min</b> → secretary · <b>300 min</b> → joint secretary · <b>420 min</b> → emergency contact</li>
+      </ul>
+    </div>
+    <div class="arr">⇄</div>
+    <div class="box aws">
+      <h2>Model: openai/gpt-oss-120b via Groq</h2>
+      <ul><li>OpenAI-compatible endpoint (OpenAIModel from Strands)</li><li>Low reasoning effort, 4k token budget for reliable tool calls</li></ul>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="box agent">
+      <h2>Agent's 4 tools</h2>
+      <ul>
+        <li><b>get_pending_check_ins</b> — unfinished check-ins + minutes elapsed</li>
+        <li><b>get_person_by_role</b> — active secretary / joint sec / volunteer</li>
+        <li><b>send_notification</b> — SNS publish</li>
+        <li><b>update_check_in_status</b> — advance stage + append audit log</li>
+      </ul>
+    </div>
+    <div class="box aws">
+      <h2>Data &amp; Messaging</h2>
+      <ul>
+        <li><b>DynamoDB:</b> Residents, Volunteers, Check-ins (escalationLog audit trail), Sign-in attempts</li>
+        <li><b>SNS:</b> daily OTP texts + escalation notifications</li>
+      </ul>
+    </div>
+    <div class="box aws">
+      <h2>Schedules &amp; Ops</h2>
+      <ul>
+        <li><b>EventBridge:</b> daily assignment 2:30 AM · escalation check / 30 min</li>
+        <li><b>CloudWatch alarms → SNS email</b> if a job fails or stalls</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="box aws">
+      <h2>Auth &amp; Security</h2>
+      <ul><li>Cognito user pool (email/password, lockout after 3 failures)</li><li>Volunteers see only their own check-ins (server-side filter)</li><li>Synthetic resident data only</li></ul>
+    </div>
+    <div class="box">
+      <h2>Output</h2>
+      <ul><li>Dashboard shows each check-in's stage: assigned → reminder → secretary → joint sec → emergency</li><li>SMS notifications at each escalation</li><li>Full audit trail per check-in in DynamoDB</li></ul>
+    </div>
+  </div>
+
+  <p class="foot">Neighborhood Safety Check-In Agent — AWS Agents for Humans Hackathon · Built with Strands Agents SDK</p>
+</div>
+</body>
+</html>
