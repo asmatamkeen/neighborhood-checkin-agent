@@ -1,5 +1,7 @@
 # neighborhood-checkin-agent
 
+**Live demo:** https://neighborhood-checkin-agent-l0gqftg77.vercel.app
+
 An AI agent that makes sure somebody actually checks on elderly residents living alone in a housing colony — and escalates to a human being when nobody does.
 
 Built for the AWS Agents for Humans hackathon (Good Neighbor Agents track), using the [Strands Agents SDK](https://github.com/strands-agents).
