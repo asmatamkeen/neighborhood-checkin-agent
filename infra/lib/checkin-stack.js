@@ -121,7 +121,7 @@ class CheckinStack extends Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'escalationAgent.handler',
       code: lambda.Code.fromAsset('../backend/agent'),
-      timeout: Duration.seconds(90),
+      timeout: Duration.seconds(300), // 7+ check-ins × LLM round-trips can exceed 90s
       memorySize: 512,
       environment: {
         RESIDENTS_TABLE: residentsTable.tableName,
@@ -199,6 +199,22 @@ class CheckinStack extends Stack {
     });
     volunteersTable.grantReadWriteData(addPersonFn);
 
+    // ---------- Lambda: soft-delete a resident or volunteer (secretary only) ----------
+    const deletePersonFn = new lambda.Function(this, 'DeletePersonFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'deletePerson.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(15),
+      environment: {
+        RESIDENTS_TABLE: residentsTable.tableName,
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+        CHECKINS_TABLE: checkInsTable.tableName,
+      },
+    });
+    residentsTable.grantReadWriteData(deletePersonFn);
+    volunteersTable.grantReadWriteData(deletePersonFn);
+    checkInsTable.grantReadData(deletePersonFn);
+
     // ---------- Lambda: get today's check-ins (role-filtered server-side) ----------
     const getCheckInsFn = new lambda.Function(this, 'GetCheckInsFn', {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -221,9 +237,13 @@ class CheckinStack extends Stack {
       handler: 'getPeople.handler',
       code: lambda.Code.fromAsset('../backend/lambdas'),
       timeout: Duration.seconds(15),
-      environment: { VOLUNTEERS_TABLE: volunteersTable.tableName },
+      environment: {
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+        RESIDENTS_TABLE: residentsTable.tableName,
+      },
     });
     volunteersTable.grantReadData(getPeopleFn);
+    residentsTable.grantReadData(getPeopleFn);
 
     // ---------- Lambda: "who am I" — profile lookup for the logged-in user ----------
     const getMyProfileFn = new lambda.Function(this, 'GetMyProfileFn', {
@@ -248,6 +268,20 @@ class CheckinStack extends Stack {
     });
     volunteersTable.grantReadData(runAssignmentNowFn);
     assignFn.grantInvoke(runAssignmentNowFn);
+
+    // ---------- Lambda: manually trigger the escalation agent on demand ----------
+    const runEscalationNowFn = new lambda.Function(this, 'RunEscalationNowFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'runEscalationNow.handler',
+      code: lambda.Code.fromAsset('../backend/lambdas'),
+      timeout: Duration.seconds(30), // returns immediately; the agent runs async
+      environment: {
+        VOLUNTEERS_TABLE: volunteersTable.tableName,
+        ESCALATE_FN_NAME: escalateFn.functionName,
+      },
+    });
+    volunteersTable.grantReadData(runEscalationNowFn);
+    escalateFn.grantInvoke(runEscalationNowFn);
 
     // ---------- EventBridge schedules ----------
     new events.Rule(this, 'DailyAssignRule', {
@@ -294,6 +328,11 @@ class CheckinStack extends Stack {
 
     const residents = api.root.addResource('residents');
     residents.addMethod('POST', new apigw.LambdaIntegration(addResidentFn), authOptions);
+    const residentItem = residents.addResource('{residentId}');
+    residentItem.addMethod('DELETE', new apigw.LambdaIntegration(deletePersonFn), authOptions);
+
+    const peopleItem = people.addResource('{volunteerId}');
+    peopleItem.addMethod('DELETE', new apigw.LambdaIntegration(deletePersonFn), authOptions);
 
     // Deliberately NOT behind the Cognito authorizer — this has to work before
     // anyone is signed in, since its whole job is guarding the sign-in itself.
@@ -302,6 +341,9 @@ class CheckinStack extends Stack {
 
     const runAssignment = api.root.addResource('run-assignment');
     runAssignment.addMethod('POST', new apigw.LambdaIntegration(runAssignmentNowFn), authOptions);
+
+    const runEscalation = api.root.addResource('run-escalation');
+    runEscalation.addMethod('POST', new apigw.LambdaIntegration(runEscalationNowFn), authOptions);
 
     this.apiUrl = api.url;
 

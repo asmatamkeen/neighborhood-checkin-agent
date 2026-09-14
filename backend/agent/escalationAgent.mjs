@@ -154,7 +154,16 @@ function buildEscalationAgent() {
     },
     modelId: 'openai/gpt-oss-120b',
     temperature: 0.1, // low temperature: this is an operational decision, not creative writing
-    maxTokens: 1024,
+    // gpt-oss-120b is a reasoning model — its internal "thinking" tokens count
+    // against the same budget as its actual answer. With the default reasoning
+    // effort and a small token budget, it was using the whole budget thinking
+    // and returning an empty response with no tool calls at all. Raising the
+    // budget and lowering reasoning effort (this task doesn't need deep
+    // reasoning, just following a stated policy) fixes that.
+    maxTokens: 4096,
+    params: {
+      reasoning_effort: 'low',
+    },
   });
 
   return new Agent({

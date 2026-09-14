@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { fetchCheckIns, fetchPeople, fetchMyProfile, markDone, reassignCheckIn, addResident, addPerson, runAssignmentNow } from './api.js';
+import { fetchCheckIns, fetchPeople, fetchMyProfile, markDone, reassignCheckIn, addResident, addPerson, runAssignmentNow, runEscalationNow, deleteResident, deleteVolunteer } from './api.js';
 import { getCurrentIdToken, signOut } from './auth.js';
 import Auth from './Auth.jsx';
 import PinPrompt from './PinPrompt.jsx';
@@ -316,6 +316,64 @@ function AddVolunteerForm({ onAdd }) {
   );
 }
 
+// Admin-panel list of people and residents with a Remove (soft-delete) button
+// per entry. Removals are confirmed in two steps to avoid accidental clicks.
+function ManagePeople({ people, onChanged }) {
+  const [busyId, setBusyId] = useState(null);
+  const [confirmId, setConfirmId] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  const remove = async (id, kind) => {
+    setBusyId(id);
+    setMsg(null);
+    try {
+      if (kind === 'resident') await deleteResident(id);
+      else await deleteVolunteer(id);
+      setMsg('Removed.');
+      onChanged();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setBusyId(null);
+      setConfirmId(null);
+    }
+  };
+
+  const row = (id, name, role, kind) => (
+    <div key={id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+      <span style={{ minWidth: 140 }}>{name}</span>
+      <span style={{ color: 'var(--ink-soft)' }}>{role.replace('_', ' ')}</span>
+      {confirmId === id ? (
+        <>
+          <button className="btn btn-done" disabled={busyId === id} onClick={() => remove(id, kind)}>
+            {busyId === id ? 'Removing…' : 'Confirm remove'}
+          </button>
+          <button className="btn btn-done" onClick={() => setConfirmId(null)}>Cancel</button>
+        </>
+      ) : (
+        <button className="btn btn-done" onClick={() => setConfirmId(id)}>Remove</button>
+      )}
+    </div>
+  );
+
+  const activePeople = people.filter((p) => p.active !== false);
+  const residents = (people.residents || []);
+
+  return (
+    <div className="card" style={{ padding: 14 }}>
+      <p className="resident-name" style={{ marginBottom: 8 }}>Manage people</p>
+      {msg && <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 8px' }}>{msg}</p>}
+      {activePeople.map((p) => row(p.volunteerId, p.name, p.role || 'volunteer', 'volunteer'))}
+      <p style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '10px 0 4px' }}>Residents</p>
+      {residents.length === 0 && <p style={{ fontSize: 12, color: 'var(--ink-soft)' }}>No residents loaded.</p>}
+      {residents.map((r) => row(r.residentId, r.name, r.unit || '', 'resident'))}
+      <p style={{ fontSize: 11, color: 'var(--ink-soft)', marginTop: 10 }}>
+        Removing deactivates the person — history is kept. Volunteers with unfinished check-ins today must be reassigned first.
+      </p>
+    </div>
+  );
+}
+
 function Dashboard({ currentUser, onSignOut }) {
   const [data, setData] = useState(null);
   const [people, setPeople] = useState([]);
@@ -325,6 +383,8 @@ function Dashboard({ currentUser, onSignOut }) {
   const [showAdmin, setShowAdmin] = useState(false);
   const [assignBusy, setAssignBusy] = useState(false);
   const [assignResult, setAssignResult] = useState(null);
+  const [escalateBusy, setEscalateBusy] = useState(false);
+  const [escalateResult, setEscalateResult] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -368,6 +428,24 @@ function Dashboard({ currentUser, onSignOut }) {
       setCardErrors((prev) => ({ ...prev, [checkInId]: e.message }));
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const handleRunEscalation = async () => {
+    setEscalateBusy(true);
+    setEscalateResult(null);
+    try {
+      const res = await runEscalationNow();
+      setEscalateResult(res.summary || 'Escalation agent started.');
+      // Agent runs async (can take minutes); poll a couple of times so the
+      // user sees the stages move without manually refreshing.
+      setTimeout(load, 30000);
+      setTimeout(load, 90000);
+      setTimeout(load, 180000);
+    } catch (e) {
+      setEscalateResult(`Couldn't run escalation: ${e.message}`);
+    } finally {
+      setEscalateBusy(false);
     }
   };
 
@@ -452,6 +530,14 @@ function Dashboard({ currentUser, onSignOut }) {
                 </button>
                 {assignResult && (
                   <p style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 6 }}>{assignResult}</p>
+                )}
+              </div>
+              <div>
+                <button className="btn btn-done" disabled={escalateBusy} onClick={handleRunEscalation}>
+                  {escalateBusy ? 'Running…' : 'Run escalation agent now'}
+                </button>
+                {escalateResult && (
+                  <p style={{ fontSize: 12, color: 'var(--ink-soft)', marginTop: 6 }}>{escalateResult}</p>
                 )}
               </div>
             </div>

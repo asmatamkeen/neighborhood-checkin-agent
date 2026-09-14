@@ -61,6 +61,18 @@ export function runAssignmentNow() {
   return authedFetch('/run-assignment', { method: 'POST' });
 }
 
+export function runEscalationNow() {
+  return authedFetch('/run-escalation', { method: 'POST' });
+}
+
+export function deleteResident(residentId) {
+  return authedFetch(`/residents/${residentId}`, { method: 'DELETE' });
+}
+
+export function deleteVolunteer(volunteerId) {
+  return authedFetch(`/people/${volunteerId}`, { method: 'DELETE' });
+}
+
 // These three don't use authedFetch on purpose — they run before sign-in,
 // when there's no token to send yet.
 async function attemptsCall(email, action) {
