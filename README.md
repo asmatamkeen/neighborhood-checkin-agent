@@ -100,14 +100,14 @@ Seed data lives in `docs/data-model.md`. Escalation thresholds are environment v
 
 **Failure alarms, because the agent failing silently is the worst-case scenario.** A system whose entire job is noticing when something's wrong needs to notice when *it* is wrong. CloudWatch alarms email a real person if the assignment job fails, if the escalation agent errors twice in a row, or if the assignment job doesn't run at all in 24 hours.
 
-## Honest limitations
+## What's next
 
-- SMS delivery is best-effort; every OTP is also logged to CloudWatch as a fallback.
-- Removing a person deactivates their record but doesn't delete their Cognito login.
-- The model ID is pinned to a Groq model, and Groq deprecates models — this already bit us once (see the build journal). Any project that depends on a specific third-party model ID should expect occasional maintenance.
-- Resident data in the demo is synthetic.
+This is a hackathon build, and parts of it are further along than others. On the near-term list:
 
-More detail on all of the above, including the debugging stories, is in [docs/build-journal.md](docs/build-journal.md).
+- **Member management is partially built.** Adding residents and volunteers works end to end. Removal exists at the schema level (records deactivate rather than delete, so history survives) but the admin UI for it needs more testing before it's trusted, and removing a person should also disable their Cognito login — right now it doesn't.
+- **Tighter escalation timing.** The escalation pipeline runs and logs correctly, but reminder and escalation notifications depend on SNS SMS delivery to Indian numbers, which is best-effort. Next step is an email fallback channel and per-stage notification retries so a missed SMS doesn't silently drop a stage.
+- **Adaptive auth.** Cognito's paid advanced-security tier (compromised-credential detection) was skipped deliberately; revisit before a real pilot.
+- **Real pilot with the colony's actual roster** — with consent from residents and their families, which is a process problem, not a code problem.
 
 ## License
 
